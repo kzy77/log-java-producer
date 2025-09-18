@@ -4,6 +4,8 @@ import com.aliyun.oss.ClientBuilderConfiguration;
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.OSSClientBuilder;
 import com.aliyun.oss.model.ObjectMetadata;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -14,6 +16,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.zip.GZIPOutputStream;
+ 
 
 /**
  * OSS 上传器：负责将批次日志压缩并上传到指定 bucket/key 前缀。
@@ -21,9 +24,12 @@ import java.util.zip.GZIPOutputStream;
  */
 public class OssUploader {
 
+    private static final Logger logger = LoggerFactory.getLogger(OssUploader.class);
+
     private final OSS oss;
     private final String bucket;
     private final String keyPrefix;
+    private final String keyPrefixWithSlash;
     private final boolean gzipEnabled;
     private final int maxRetries;
     private final long baseBackoffMs;
@@ -53,6 +59,7 @@ public class OssUploader {
         this.oss = new OSSClientBuilder().build(endpoint, accessKeyId, accessKeySecret, conf);
         this.bucket = bucket;
         this.keyPrefix = keyPrefix != null ? keyPrefix.replaceAll("^/+|/+$", "") : "logs";
+        this.keyPrefixWithSlash = this.keyPrefix.isEmpty() ? "" : (this.keyPrefix + "/");
         this.gzipEnabled = gzipEnabled;
         this.maxRetries = Math.max(0, maxRetries);
         this.baseBackoffMs = Math.max(100L, baseBackoffMs);
@@ -62,7 +69,11 @@ public class OssUploader {
 
     /** 释放底层客户端。 */
     public void close() {
-        try { oss.shutdown(); } catch (Throwable ignore) {}
+        try { 
+            oss.shutdown(); 
+        } catch (Throwable throwable) {
+            logger.warn("Failed to shutdown OSS client", throwable);
+        }
     }
 
     /**
@@ -82,6 +93,7 @@ public class OssUploader {
             }
         } catch (IOException ioException) {
             // 回退到未压缩上传
+            logger.warn("GZIP compression failed, fallback to plain NDJSON", ioException);
             toUpload = ndjson;
             compressed = false;
         }
@@ -115,14 +127,19 @@ public class OssUploader {
 
     /** 将事件数组编码为 NDJSON（每行一个 UTF-8 文本）。 */
     private byte[] encodeNdjson(List<BatchingQueue.LogEvent> events) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(256, events.size() * 128));
-        for (BatchingQueue.LogEvent ev : events) {
-            try {
-                out.write(ev.payload);
-                out.write('\n');
-            } catch (IOException ignored) { }
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(256, events.size() * 128))) {
+            for (BatchingQueue.LogEvent ev : events) {
+                try {
+                    out.write(ev.payload);
+                    out.write('\n');
+                } catch (IOException ignored) { }
+            }
+            return out.toByteArray();
+        } catch (IOException e) {
+            // ByteArrayOutputStream 理论上不会抛出，但为一致性记录
+            logger.warn("encodeNdjson unexpected error", e);
+            return new byte[0];
         }
-        return out.toByteArray();
     }
 
     /** GZIP 压缩 */
@@ -139,8 +156,7 @@ public class OssUploader {
         long now = System.currentTimeMillis();
         String ts = KEY_TS.format(Instant.ofEpochMilli(now));
         int rnd = ThreadLocalRandom.current().nextInt(100000, 999999);
-        String prefix = keyPrefix.isEmpty() ? "" : (keyPrefix + "/");
-        return prefix + ts + "-" + rnd + ".ndjson" + (gzipEnabled ? ".gz" : "");
+        return keyPrefixWithSlash + ts + "-" + rnd + ".ndjson" + (gzipEnabled ? ".gz" : "");
     }
 
     /** 指数退避（含抖动） */

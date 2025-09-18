@@ -146,7 +146,7 @@ public class BatchingQueue {
             if (willExceedCount || willExceedBytes) {
                 if (!buffer.isEmpty()) {
                     consumer.onBatch(Collections.unmodifiableList(buffer), bytes);
-                    buffer = new ArrayList<>(batchMaxMessages);
+                    buffer.clear();
                     bytes = 0;
                 }
             }
@@ -156,7 +156,7 @@ public class BatchingQueue {
 
             if (!drainAll && (buffer.size() >= batchMaxMessages || bytes >= batchMaxBytes)) {
                 consumer.onBatch(Collections.unmodifiableList(buffer), bytes);
-                buffer = new ArrayList<>(batchMaxMessages);
+                buffer.clear();
                 bytes = 0;
             }
         }

@@ -33,7 +33,7 @@ public final class DisruptorBatchingQueue {
     private final int batchMaxMessages;
     private final int batchMaxBytes;
     private final long flushIntervalMs;
-    private final boolean blockOnFull; // 提示：Disruptor 无阻塞 put，满时可自旋或丢弃
+    private final boolean blockOnFull; // 提示：满时可自旋或丢弃
     private final BatchingQueue.BatchConsumer consumer;
 
     private volatile boolean started = false;
@@ -83,7 +83,7 @@ public final class DisruptorBatchingQueue {
                     if (willExceedCount || willExceedBytes) {
                         if (!buffer.isEmpty()) {
                             consumer.onBatch(Collections.unmodifiableList(buffer), bytes);
-                            buffer = new ArrayList<>(batchMaxMessages);
+                            buffer.clear();
                             bytes = 0;
                         }
                     }
@@ -97,7 +97,7 @@ public final class DisruptorBatchingQueue {
                 if (endOfBatch || timeUp || buffer.size() >= batchMaxMessages || bytes >= batchMaxBytes) {
                     if (!buffer.isEmpty()) {
                         consumer.onBatch(Collections.unmodifiableList(buffer), bytes);
-                        buffer = new ArrayList<>(batchMaxMessages);
+                        buffer.clear();
                         bytes = 0;
                     }
                     lastFlush = now;
@@ -128,6 +128,9 @@ public final class DisruptorBatchingQueue {
      * @return 是否成功写入环形缓冲
      */
     public boolean offer(byte[] payload) {
+        if (!started) {
+            return false;
+        }
         long ts = System.currentTimeMillis();
         while (true) {
             if (ringBuffer.hasAvailableCapacity(1)) {
@@ -143,8 +146,13 @@ public final class DisruptorBatchingQueue {
             if (!blockOnFull) {
                 return false; // 丢弃
             }
-            // 自旋等待空间可用（JDK8 兼容）
-            Thread.yield();
+            // 自旋等待空间可用（JDK8 兼容）并退避，避免占用CPU过高
+            try {
+                Thread.sleep(1L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
     }
 }
