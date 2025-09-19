@@ -1,10 +1,8 @@
 package io.github.ossappender.core;
-
 /**
  * 通用二进制上传接口：用于将编码后的批量日志以对象存储形式上传。
  */
 public interface BinaryUploader {
-
     /**
      * 执行上传。
      * @param objectKey 目标对象Key（例如OSS路径）
@@ -15,5 +13,3 @@ public interface BinaryUploader {
      */
     void upload(String objectKey, byte[] contentBytes, String contentType, String contentEncoding) throws Exception;
 }
-
-

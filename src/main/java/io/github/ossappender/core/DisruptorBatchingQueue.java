@@ -1,23 +1,19 @@
 package io.github.ossappender.core;
-
 import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.EventFactory;
 import com.lmax.disruptor.EventHandler;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executors;
-
 /**
  * 基于 LMAX Disruptor 的批处理队列实现：低 GC、低延迟。
  * 与 BatchingQueue 保持相同回调语义。
  */
 public final class DisruptorBatchingQueue {
-
     /**
      * 事件载体，避免频繁分配。
      */
@@ -25,19 +21,20 @@ public final class DisruptorBatchingQueue {
         public byte[] payload;
         public long timestampMs;
         void set(byte[] p, long ts) { this.payload = p; this.timestampMs = ts; }
-        void clear() { this.payload = null; this.timestampMs = 0L; }
+        void clear() {
+            this.payload = null;
+            this.timestampMs = 0L;
+        }
     }
-
     private final Disruptor<LogEventHolder> disruptor;
     private final RingBuffer<LogEventHolder> ringBuffer;
     private final int batchMaxMessages;
     private final int batchMaxBytes;
     private final long flushIntervalMs;
-    private final boolean blockOnFull; // 提示：满时可自旋或丢弃
+    // 提示：满时可自旋或丢弃
+    private final boolean blockOnFull;
     private final BatchingQueue.BatchConsumer consumer;
-
     private volatile boolean started = false;
-
     /**
      * 构造 Disruptor 队列。
      * @param capacity 环形缓冲大小（2 的幂）
@@ -60,7 +57,6 @@ public final class DisruptorBatchingQueue {
         this.flushIntervalMs = Math.max(1, flushIntervalMs);
         this.blockOnFull = blockOnFull;
         this.consumer = consumer;
-
         EventFactory<LogEventHolder> factory = LogEventHolder::new;
         ProducerType type = multiProducer ? ProducerType.MULTI : ProducerType.SINGLE;
         this.disruptor = new Disruptor<>(factory, capacity, Executors.newSingleThreadExecutor(r -> {
@@ -68,12 +64,10 @@ public final class DisruptorBatchingQueue {
             t.setDaemon(true);
             return t;
         }), type, new BlockingWaitStrategy());
-
         this.disruptor.handleEventsWith(new EventHandler<LogEventHolder>() {
             private List<BatchingQueue.LogEvent> buffer = new ArrayList<>(DisruptorBatchingQueue.this.batchMaxMessages);
             private int bytes = 0;
             private long lastFlush = System.currentTimeMillis();
-
             @Override
             public void onEvent(LogEventHolder ev, long sequence, boolean endOfBatch) {
                 if (ev.payload != null) {
@@ -91,7 +85,6 @@ public final class DisruptorBatchingQueue {
                     bytes += size;
                     ev.clear();
                 }
-
                 long now = System.currentTimeMillis();
                 boolean timeUp = (now - lastFlush) >= flushIntervalMs;
                 if (endOfBatch || timeUp || buffer.size() >= batchMaxMessages || bytes >= batchMaxBytes) {
@@ -104,24 +97,24 @@ public final class DisruptorBatchingQueue {
                 }
             }
         });
-
         this.ringBuffer = disruptor.getRingBuffer();
     }
-
     /** 启动消费者线程 */
     public synchronized void start() {
-        if (started) return;
+        if (started) {
+            return;
+        }
         disruptor.start();
         started = true;
     }
-
     /** 关闭队列 */
     public synchronized void close() {
-        if (!started) return;
+        if (!started) {
+            return;
+        }
         disruptor.shutdown();
         started = false;
     }
-
     /**
      * 提交事件。
      * @param payload 已编码日志字节
@@ -144,7 +137,8 @@ public final class DisruptorBatchingQueue {
                 return true;
             }
             if (!blockOnFull) {
-                return false; // 丢弃
+                // 丢弃
+                return false;
             }
             // 自旋等待空间可用（JDK8 兼容）并退避，避免占用CPU过高
             try {
@@ -156,5 +150,3 @@ public final class DisruptorBatchingQueue {
         }
     }
 }
-
-
