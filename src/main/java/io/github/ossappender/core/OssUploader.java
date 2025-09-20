@@ -70,7 +70,7 @@ public class OssUploader {
     /**
      * 将一批日志编码为 NDJSON 文本并上传到 OSS。
      */
-    public void uploadBatch(List<BatchingQueue.LogEvent> events, int totalBytes) {
+    public void uploadBatch(List<DisruptorBatchingQueue.LogEvent> events, int totalBytes) {
         byte[] ndjson = encodeNdjson(events);
         byte[] toUpload;
         boolean compressed = false;
@@ -121,9 +121,9 @@ public class OssUploader {
         hooks.onUploadFailure(objectKey, last);
     }
     /** 将事件数组编码为 NDJSON（每行一个 UTF-8 文本）。 */
-    private byte[] encodeNdjson(List<BatchingQueue.LogEvent> events) {
+    private byte[] encodeNdjson(List<DisruptorBatchingQueue.LogEvent> events) {
         try (ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(256, events.size() * 128))) {
-            for (BatchingQueue.LogEvent ev : events) {
+            for (DisruptorBatchingQueue.LogEvent ev : events) {
                 try {
                     out.write(ev.payload);
                     out.write('\n');

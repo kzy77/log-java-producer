@@ -10,10 +10,30 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executors;
 /**
- * 基于 LMAX Disruptor 的批处理队列实现：低 GC、低延迟。
- * 与 BatchingQueue 保持相同回调语义。
+ * 基于 LMAX Disruptor 的高性能批处理队列实现：低 GC、低延迟。
  */
 public final class DisruptorBatchingQueue {
+    /** 单条日志的封装结构 */
+    public static class LogEvent {
+        public final byte[] payload;
+        public final long timestampMs;
+        /**
+         * 构造一条日志事件。
+         * @param payload 已编码的日志字节
+         * @param timestampMs 事件时间戳（毫秒）
+         */
+        public LogEvent(byte[] payload, long timestampMs) {
+            this.payload = payload;
+            this.timestampMs = timestampMs;
+        }
+    }
+    /** 批次回调接口 */
+    public interface BatchConsumer {
+        /**
+         * 当达到阈值或超时触发时调用，返回是否已成功接收处理该批次。
+         */
+        boolean onBatch(List<LogEvent> events, int totalBytes);
+    }
     /**
      * 事件载体，避免频繁分配。
      */
@@ -33,7 +53,7 @@ public final class DisruptorBatchingQueue {
     private final long flushIntervalMs;
     // 提示：满时可自旋或丢弃
     private final boolean blockOnFull;
-    private final BatchingQueue.BatchConsumer consumer;
+    private final BatchConsumer consumer;
     private volatile boolean started = false;
     /**
      * 构造 Disruptor 队列。
@@ -51,7 +71,7 @@ public final class DisruptorBatchingQueue {
                                   long flushIntervalMs,
                                   boolean blockOnFull,
                                   boolean multiProducer,
-                                  BatchingQueue.BatchConsumer consumer) {
+                                  BatchConsumer consumer) {
         this.batchMaxMessages = Math.max(1, batchMaxMessages);
         this.batchMaxBytes = Math.max(1, batchMaxBytes);
         this.flushIntervalMs = Math.max(1, flushIntervalMs);
@@ -65,7 +85,7 @@ public final class DisruptorBatchingQueue {
             return t;
         }), type, new BlockingWaitStrategy());
         this.disruptor.handleEventsWith(new EventHandler<LogEventHolder>() {
-            private List<BatchingQueue.LogEvent> buffer = new ArrayList<>(DisruptorBatchingQueue.this.batchMaxMessages);
+            private List<LogEvent> buffer = new ArrayList<>(DisruptorBatchingQueue.this.batchMaxMessages);
             private int bytes = 0;
             private long lastFlush = System.currentTimeMillis();
             @Override
@@ -81,7 +101,7 @@ public final class DisruptorBatchingQueue {
                             bytes = 0;
                         }
                     }
-                    buffer.add(new BatchingQueue.LogEvent(ev.payload, ev.timestampMs));
+                    buffer.add(new LogEvent(ev.payload, ev.timestampMs));
                     bytes += size;
                     ev.clear();
                 }
