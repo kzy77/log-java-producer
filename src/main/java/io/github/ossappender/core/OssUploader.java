@@ -17,7 +17,7 @@ import java.util.zip.GZIPOutputStream;
 
 /**
  * OSS 上传器：负责将批次日志压缩并上传到指定 bucket/key 前缀。
- * 支持可配置 gzip、重试与指数退避。
+ * 默认使用 NDJSON 格式和 gzip 压缩，支持重试与指数退避。
  */
 public class OssUploader {
     private static final Logger logger = LoggerFactory.getLogger(OssUploader.class);
@@ -25,7 +25,6 @@ public class OssUploader {
     private final String bucket;
     private final String keyPrefix;
     private final String keyPrefixWithSlash;
-    private final boolean gzipEnabled;
     private final int maxRetries;
     private final long baseBackoffMs;
     private final long maxBackoffMs;
@@ -40,7 +39,6 @@ public class OssUploader {
                        String accessKeySecret,
                        String bucket,
                        String keyPrefix,
-                       boolean gzipEnabled,
                        int maxRetries,
                        long baseBackoffMs,
                        long maxBackoffMs,
@@ -53,7 +51,6 @@ public class OssUploader {
         this.bucket = bucket;
         this.keyPrefix = keyPrefix != null ? keyPrefix.replaceAll("^/+|/$", "") : "logs";
         this.keyPrefixWithSlash = this.keyPrefix.isEmpty() ? "" : (this.keyPrefix + "/");
-        this.gzipEnabled = gzipEnabled;
         this.maxRetries = Math.max(0, maxRetries);
         this.baseBackoffMs = Math.max(100L, baseBackoffMs);
         this.maxBackoffMs = Math.max(this.baseBackoffMs, maxBackoffMs);
@@ -68,31 +65,24 @@ public class OssUploader {
         }
     }
     /**
-     * 将一批日志编码为 NDJSON 文本并上传到 OSS。
+     * 将一批日志编码为 NDJSON 文本，gzip 压缩并上传到 OSS。
      */
     public void uploadBatch(List<DisruptorBatchingQueue.LogEvent> events, int totalBytes) {
         byte[] ndjson = encodeNdjson(events);
         byte[] toUpload;
-        boolean compressed = false;
         try {
-            if (gzipEnabled) {
-                byte[] gz = gzip(ndjson);
-                toUpload = gz;
-                compressed = true;
-            } else {
-                toUpload = ndjson;
-            }
+            toUpload = gzip(ndjson);
         } catch (IOException ioException) {
             // 回退到未压缩上传
             logger.warn("GZIP compression failed, fallback to plain NDJSON", ioException);
             toUpload = ndjson;
-            compressed = false;
         }
         String objectKey = buildObjectKey();
         ObjectMetadata meta = new ObjectMetadata();
         meta.setContentLength(toUpload.length);
         meta.setContentType("application/x-ndjson; charset=utf-8");
-        if (compressed) {
+        // 默认设置 gzip 压缩，除非压缩失败回退到原始数据
+        if (toUpload != ndjson) {
             meta.setContentEncoding("gzip");
         }
         int attempt = 0;
@@ -144,12 +134,12 @@ public class OssUploader {
         }
         return bos.toByteArray();
     }
-    /** 构建对象 key，包含 UTC 时间与随机后缀 */
+    /** 构建对象 key，包含 UTC 时间与随机后缀，默认使用 gzip 压缩 */
     private String buildObjectKey() {
         long now = System.currentTimeMillis();
         String ts = KEY_TS.format(Instant.ofEpochMilli(now));
         int rnd = ThreadLocalRandom.current().nextInt(100000, 999999);
-        return keyPrefixWithSlash + ts + "-" + rnd + ".ndjson" + (gzipEnabled ? ".gz" : "");
+        return keyPrefixWithSlash + ts + "-" + rnd + ".ndjson.gz";
     }
     /** 指数退避（含抖动） */
     private long computeBackoff(int attempt) {
